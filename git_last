@@ -1,0 +1,125 @@
+enter_fullscreen() {
+  tput smcup
+  tput civis
+  stty -echo
+}
+
+leave_fullscreen() {
+  tput cnorm
+  tput rmcup
+  stty echo
+}
+
+handle_sigint() {
+  leave_fullscreen
+  S="$?"
+  kill 0
+  exit $S
+}
+
+handle_sigtstp() {
+  leave_fullscreen
+  kill -s SIGSTOP $$
+}
+
+YELLOW=$(tput setaf 3)
+NORMAL=$(tput sgr0)
+GREY=$(tput setaf 247)
+
+print_line() {
+	prefix=$([ "$1" = "$selected" ] && echo "${YELLOW}-> ${NORMAL}" || echo "  ${GREY}")
+	printf "  ${prefix}$1\n"
+}
+
+
+display_branches_with_selected() {
+  selected=${branches[$1]}
+  echo
+  for i in "${!branches[@]}"; do
+    branch=${branches[$i]}
+    [[ "$branch" = "$selected" ]] && tput sc
+    print_line $branch
+  done
+  tput rc
+  tput cuu1
+  echo
+}
+
+move_selector() {
+  up='cuu1'
+  down='cud1'
+  (( active_index = active_index + $1 ))
+  direction=$([ "$1" = 1 ] && echo "$down" || echo "$up")
+
+  prev=$selected
+  selected=${branches[$active_index]}
+
+  tput sc
+  tput el
+  tput $direction
+  tput el
+
+  [[ "$1" = 1 ]] && tput $up
+
+  print_line $([ "$1" = 1 ] && echo "$prev" || echo "$selected")
+  print_line $([ "$1" = 1 ] && echo "$selected" || echo "$prev")
+
+  tput rc
+  tput $direction
+}
+
+display_branches() {
+  enter_fullscreen
+  active_branch=$(git branch | grep \* | cut -d ' ' -f2)
+  branches=( $(git for-each-ref --count=$1 --sort=-committerdate refs/heads/ --format='%(refname:short)') )
+  for i in "${!branches[@]}"; do
+    if [[ "${branches[$i]}" = $active_branch ]]; then
+      active_index=$i
+    fi
+  done
+  clear
+  display_branches_with_selected $active_index
+
+  trap handle_sigint INT
+  trap handle_sigtstp SIGTSTP
+
+  ESCAPE_SEQ=$'\033'
+  UP=$'A'
+  DOWN=$'B'
+
+  while true; do
+    read -rsn 1 key
+    case "$key" in
+      $ESCAPE_SEQ)
+        # Handle ESC sequences followed by other characters, i.e. arrow keys
+        read -rsn 1 -t 1 tmp
+        if  [[ "$tmp" == "[" ]]; then
+          read -rsn 1 -t 1 arrow
+          case "$arrow" in
+            $UP)
+              move_selector '-1'
+              ;;
+            $DOWN)
+              move_selector '1'
+              ;;
+          esac
+        fi
+        ;;
+      "q")
+        clear
+        leave_fullscreen
+        exit
+        ;;
+      "")
+        # enter key returns empty string
+        $(git checkout $selected)
+        leave_fullscreen
+        exit
+        ;;
+    esac
+  done
+}
+
+
+test -z "$(git)"
+display_branches ${1-15}
